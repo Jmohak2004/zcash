@@ -1,0 +1,24 @@
+{
+  "name": "z-pay",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm run dev -w @z-pay/backend\" \"npm run dev -w @z-pay/frontend\"",
+    "build": "npm run build -w @z-pay/frontend",
+    "test": "npm run test -w @z-pay/backend",
+    "typecheck": "npm run typecheck -w @z-pay/frontend",
+    "sdk:build": "node scripts/build-sdk.mjs",
+    "snap:prepare": "node scripts/prepare-snap.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "concurrently": "^9.2.1"
+  }
+}

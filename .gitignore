@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+.DS_Store
+
+.cache/
+apps/frontend/public/sdk/
+data/
+*.sqlite*
+test-results/
+playwright-report/
