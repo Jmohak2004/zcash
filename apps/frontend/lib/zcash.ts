@@ -97,3 +97,44 @@ export async function cancelPreparedAttempt(id: string) {
   await transition(id, 'cancel', { token });
   sessionStorage.removeItem(`zpay:attempt:${id}`);
 }
+
+// Fetches the current testnet tip height via a raw gRPC-web call so we can use
+// it as the wallet birthday, avoiding GetTreeState(0) which fails on this chain.
+async function getChainTipHeight(endpoint: string): Promise<number> {
+  const res = await fetch(`${endpoint}/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetLatestBlock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/grpc-web+proto', 'X-Grpc-Web': '1' },
+    body: new Uint8Array([0, 0, 0, 0, 0]), // gRPC-web frame: flag=0, length=0 (empty ChainSpec)
+  });
+  if (!res.ok) throw new Error(`GetLatestBlock HTTP ${res.status}`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  // Skip the 5-byte gRPC-web frame header, then decode field 1 (height) as a varint.
+  let pos = 5;
+  if (buf[pos] !== 0x08) throw new Error('Unexpected protobuf tag in GetLatestBlock response');
+  pos++;
+  let height = 0, shift = 0;
+  while (pos < buf.length) {
+    const b = buf[pos++];
+    height |= (b & 0x7f) << shift;
+    if (!(b & 0x80)) break;
+    shift += 7;
+  }
+  return height;
+}
+
+// Derives the account's shielded unified testnet address from the Snap's viewing key.
+// Uses the current chain tip as the birthday to avoid GetTreeState(0) failures.
+export async function getShieldedAddress(provider: Provider): Promise<string> {
+  const endpoint = process.env.NEXT_PUBLIC_LIGHTWALLETD_URL;
+  if (!endpoint) throw new Error('Set a testnet gRPC-web lightwalletd endpoint first.');
+  const sdk = await loadSdk();
+  const viewingKey = await invoke(provider, 'getViewingKey');
+  const fingerprint = await invoke(provider, 'getSeedFingerprint');
+  if (typeof viewingKey !== 'string' || typeof fingerprint !== 'string') throw new Error('Invalid account response from Snap.');
+  const birthday = await getChainTipHeight(endpoint);
+  const wallet = new sdk.WebWallet('test', endpoint, 1, 3);
+  const account = await wallet.create_account_ufvk('Z-Pay testnet', viewingKey, sdk.SeedFingerprint.from_bytes(fromHex(fingerprint)), 0, birthday);
+  const address = await wallet.get_current_address(account);
+  if (typeof address !== 'string' || !address) throw new Error('Could not derive a shielded address from the Snap.');
+  return address;
+}

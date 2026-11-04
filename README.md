@@ -45,7 +45,7 @@ infra/                       Local testnet gRPC-web proxy
 - **ChainSafe WebZjs** (pinned `a50df94`, patched) — in-browser wallet SDK compiled to WASM (Rust nightly + wasm-pack), run under cross-origin isolation.
 - **ChainSafe Zcash Snap** for **MetaMask Flask** — holds the spending key, signs the PCZT, origin-locked and forced to testnet by the tracked patch.
 - **lightwalletd** (public testnet, e.g. `testnet.zec.rocks`) behind a **Traefik** gRPC-web proxy.
-- **Backend:** Node.js 22, Express, Twilio (WhatsApp + signature verification), OpenAI (invoice extraction), `node:sqlite`, `uuid`.
+- **Backend:** Node.js 22, Express, Twilio (WhatsApp + signature verification), Google Gemini via its OpenAI-compatible API (invoice extraction), `node:sqlite`, `uuid`.
 - **Frontend:** Next.js 16 (App Router, Turbopack), React 18, Tailwind CSS (neo-brutalist), TypeScript.
 - **Settlement:** watch-only zcashd observer (`z_listreceivedbyaddress`).
 - **Tooling:** Node test runner, Playwright, Docker Compose.
@@ -84,7 +84,7 @@ Open http://localhost:3000. `/checkout/demo` is a clearly marked, non-paying UI 
 
 | Backend configuration | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | Server-side invoice extraction |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` | Server-side invoice extraction. Works with any OpenAI-compatible provider; the demo uses Google Gemini (`OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`, `OPENAI_MODEL=gemini-flash-lite-latest`) |
 | `MERCHANT_Z_ADDRESS` | Actual shielded **testnet** recipient |
 | `MERCHANT_WHATSAPP_NUMBER` | Allowed sender, including `whatsapp:` prefix |
 | `TWILIO_AUTH_TOKEN` | Signature verification |

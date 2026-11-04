@@ -14,7 +14,8 @@ and documented.
 
 | Area | State |
 | --- | --- |
-| Backend (Express/Twilio/OpenAI/SQLite) | ✅ Done, 7/7 tests pass (Node 22) |
+| Backend (Express/Twilio/Gemini/SQLite) | ✅ Done, 7/7 tests pass (Node 22) |
+| Twilio WhatsApp webhook + Gemini extraction, wired & verified live | ✅ signed request → 200; Gemini parses in ~1.2s (set up via ngrok) |
 | Frontend (Next.js checkout + `/merchant`) | ✅ Done, typecheck clean |
 | Snap patch (ZIP-321 memo, shielded-recipient, real txid, testnet lock) | ✅ Done |
 | Independent receipt observer | ✅ Done (optional watch-only node) |
@@ -48,9 +49,11 @@ Each item says **file → change → how to verify**. Ordered by value.
    `<<...>>` slots). Verify: the txid opens on `testnet.zcashexplorer.app` as a shielded tx.
 2. **Fill the remaining `<<...>>` slots** in [SUBMISSION.md](SUBMISSION.md): Luma email,
    video URL, optional public URL. Verify: no `<<` left in the file.
-3. **(Optional) Make merchant config real** in `apps/backend/.env`: `OPENAI_API_KEY`,
-   `MERCHANT_Z_ADDRESS` (testnet shielded), `MERCHANT_WHATSAPP_NUMBER`. Verify: `npm run doctor`
-   shows them configured; a webhook curl ([RUNBOOK](docs/RUNBOOK.md) §3) returns a checkout link.
+3. **Set `MERCHANT_Z_ADDRESS`** in `apps/backend/.env` (testnet shielded `utest1…`/`ztestsapling1…`).
+   The webhook throws "Merchant address missing" ([server.js](apps/backend/server.js) L45) until this is set, so
+   invoice creation fails without it. LLM extraction (Gemini) and Twilio are already configured
+   in `.env` (gitignored). Verify: a signed webhook request ([RUNBOOK](docs/RUNBOOK.md) §3) returns a
+   `/checkout/<uuid>` link. `MERCHANT_WHATSAPP_NUMBER` is the sender allowlist (whatsapp:+…).
 4. **(Optional) Enable the observer** for live settlement: set `ZCASH_RPC_URL/USER/PASSWORD`
    to a synced watch-only testnet node that can decrypt the merchant address, import a
    **Sapling** viewing key (see README §5 for the Orchard caveat). Verify: `/health` →
@@ -86,7 +89,7 @@ viewing key off the page, Nym network privacy, Orchard observer).
 ```
 apps/backend/
   server.js            Express app: /webhook/twilio, /api/session/*, /api/merchant, /health
-  src/extract.js       OpenAI invoice extraction (exact required prompt) + validation
+  src/extract.js       LLM invoice extraction (Gemini via OpenAI-compatible API) + validation
   src/store.js         SQLite persistence (node:sqlite)
   src/verifier.js      Independent watch-only receipt reconciliation
   test/server.test.js  7 tests (HTTP, persistence, state machine, settlement)

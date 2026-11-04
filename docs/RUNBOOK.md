@@ -32,7 +32,11 @@ npm run snap:prepare  # then: npm i --prefix .cache/snap && npm run build --pref
 ```
 
 Backend `.env` keys that matter for the demo:
-- `OPENAI_API_KEY` — required; the merchant message is parsed by the LLM.
+- `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`) — required; the merchant
+  message is parsed by an LLM. Any OpenAI-compatible provider works. The demo uses Google
+  Gemini: `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/` and
+  `OPENAI_MODEL=gemini-flash-lite-latest` (fast and stable; `gemini-3.8-flash` was
+  overloaded during testing).
 - `MERCHANT_Z_ADDRESS` — your **testnet** shielded (unified/sapling) receiving address.
 - `MERCHANT_WHATSAPP_NUMBER` — the only sender allowed to create invoices, e.g. `whatsapp:+1555...`.
 - `TWILIO_VALIDATE_SIGNATURE=false` — lets you create invoices by local curl without Twilio (dev only).
@@ -106,6 +110,26 @@ curl -s localhost:3001/webhook/twilio \
 Open that URL. **Checkpoint:** the invoice shows amount `0.5 ZEC`, memo
 `Website Design`, your merchant shielded address, and `TESTNET ONLY`.
 
+### 3b. Wiring real WhatsApp (Twilio + ngrok)
+
+To take the merchant message from an actual phone instead of curl:
+
+1. **Expose the backend:** `ngrok http 3001`. Copy the `https://…ngrok-free.dev` URL.
+   The free URL changes every restart; keep ngrok running for the whole demo.
+2. **Backend `.env`** (gitignored — never commit): set `TWILIO_AUTH_TOKEN`,
+   `TWILIO_WEBHOOK_URL=https://<ngrok>/webhook/twilio` (must match the console exactly),
+   `MERCHANT_WHATSAPP_NUMBER=whatsapp:+<your phone>`, and `TWILIO_VALIDATE_SIGNATURE=true`.
+   Restart the backend so it reloads the env.
+3. **Twilio Console → Messaging → Try it out → WhatsApp sandbox:** join the sandbox from
+   your phone (send the `join <code>` to `+1 415 523 8886`), then under *Sandbox settings*
+   set **When a message comes in** to the same `https://<ngrok>/webhook/twilio`, method POST.
+4. From your phone, message *"Create a checkout for 0.5 ZEC for Website Design"*. The bot
+   replies with the checkout link.
+
+Signature verification is enforced whenever `TWILIO_VALIDATE_SIGNATURE != false`: an unsigned
+request returns `403`. The Twilio Account SID is only needed if you add outbound confirmation
+messages; the inbound reply-only flow uses TwiML and needs just the auth token.
+
 ---
 
 ## 4. Fund the buyer wallet (do this before the demo, not during)
@@ -167,3 +191,4 @@ txid alone never does this. Showing that reconciliation on the `/merchant` dashb
 | Snap won't connect / origin rejected | Frontend not on `localhost:3000`, or Snap built for a different origin | Step 1; re-run `npm run snap:prepare` with `CHECKOUT_ORIGIN` |
 | Sync never finishes | Birthday block `0` (full scan) | Enter a recent height (step 5) |
 | "This checkout requires the Z-Pay testnet development Snap" | `NEXT_PUBLIC_ZCASH_SNAP_ID` not `local:` | Check `.env.local` |
+| Bot always replies "Could not create your checkout" | `MERCHANT_Z_ADDRESS` empty (server.js throws "Merchant address missing" before extraction), or the LLM key/model is wrong | Set `MERCHANT_Z_ADDRESS`; check `OPENAI_*` keys |

@@ -1,11 +1,8 @@
 services:
   lightwalletd-proxy:
-    image: traefik:v3.1
+    image: envoyproxy/envoy:v1.31-latest
     ports:
-      - "127.0.0.1:9067:80"
-    command:
-      - --entrypoints.web.address=:80
-      - --providers.file.filename=/etc/traefik/routes.yaml
-      - --global.sendanonymoususage=false
+      - "127.0.0.1:9067:9067"
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
     volumes:
-      - ./routes.yaml:/etc/traefik/routes.yaml:ro
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
