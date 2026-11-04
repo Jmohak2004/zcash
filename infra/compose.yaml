@@ -1,0 +1,11 @@
+services:
+  lightwalletd-proxy:
+    image: traefik:v3.1
+    ports:
+      - "127.0.0.1:9067:80"
+    command:
+      - --entrypoints.web.address=:80
+      - --providers.file.filename=/etc/traefik/routes.yaml
+      - --global.sendanonymoususage=false
+    volumes:
+      - ./routes.yaml:/etc/traefik/routes.yaml:ro

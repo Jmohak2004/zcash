@@ -1,0 +1,17 @@
+http:
+  routers:
+    testnet:
+      rule: PathPrefix(`/`)
+      entryPoints: [web]
+      service: testnet
+      middlewares: [grpc-web]
+  middlewares:
+    grpc-web:
+      grpcWeb:
+        allowOrigins:
+          - http://localhost:3000
+  services:
+    testnet:
+      loadBalancer:
+        servers:
+          - url: https://testnet.zec.rocks:443
