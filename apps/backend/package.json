@@ -1,0 +1,6 @@
+{
+  "name": "@z-pay/backend", "private": true, "type": "module",
+  "scripts": {"dev": "node --watch --env-file-if-exists=.env server.js", "start": "node --env-file-if-exists=.env server.js", "test": "node --test"},
+  "dependencies": {"express": "^5.1.0", "twilio": "^5.10.0", "openai": "^7.50.0", "uuid": "^13.0.0"},
+  "devDependencies": {"supertest": "^7.1.4"}
+}
