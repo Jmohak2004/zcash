@@ -1,0 +1,249 @@
+diff --git a/crates/webzjs-wallet/src/bindgen/wallet.rs b/crates/webzjs-wallet/src/bindgen/wallet.rs
+index 7b29651..e2c30ff 100644
+--- a/crates/webzjs-wallet/src/bindgen/wallet.rs
++++ b/crates/webzjs-wallet/src/bindgen/wallet.rs
+@@ -496,10 +496,18 @@ impl WebWallet {
+         account_id: u32,
+         to_address: String,
+         value: u64,
++        memo: Option<Vec<u8>>,
+     ) -> Result<Pczt, Error> {
++        let decoded = zcash_keys::address::Address::decode(&self.inner.network, &to_address)
++            .ok_or_else(|| Error::Generic("Invalid recipient or wrong network".into()))?;
++        match decoded {
++            zcash_keys::address::Address::Sapling(_) => {},
++            zcash_keys::address::Address::Unified(ref ua) if ua.has_orchard() || ua.has_sapling() => {},
++            _ => return Err(Error::Generic("A shielded recipient is required".into())),
++        }
+         let to_address = ZcashAddress::try_from_encoded(&to_address)?;
+         self.inner
+-            .pczt_create(AccountId::from(account_id), to_address, value)
++            .pczt_create(AccountId::from(account_id), to_address, value, memo)
+             .await
+             .map(Into::into)
+     }
+@@ -524,7 +532,7 @@ impl WebWallet {
+             .map(Into::into)
+     }
+ 
+-    pub async fn pczt_send(&self, pczt: Pczt) -> Result<(), Error> {
++    pub async fn pczt_send(&self, pczt: Pczt) -> Result<String, Error> {
+         self.inner.pczt_send(pczt.into()).await
+     }
+ 
+diff --git a/crates/webzjs-wallet/src/init.rs b/crates/webzjs-wallet/src/init.rs
+index 4896720..e04f253 100644
+--- a/crates/webzjs-wallet/src/init.rs
++++ b/crates/webzjs-wallet/src/init.rs
+@@ -23,7 +23,7 @@ fn setup_tracing() {
+     #[cfg(not(feature = "wasm"))]
+     let subscriber = {
+         let filter_layer = EnvFilter::builder()
+-            .with_default_directive(LevelFilter::INFO.into())
++            .with_default_directive(LevelFilter::WARN.into())
+             .from_env()
+             .unwrap();
+         let fmt_layer = tracing_subscriber::fmt::layer().with_ansi(true);
+@@ -39,10 +39,10 @@ fn setup_tracing() {
+ 
+         // For WASM, we must set the directives here at compile time.
+         let filter_layer = EnvFilter::default()
+-            .add_directive(LevelFilter::INFO.into())
+-            .add_directive("zcash_client_memory=info".parse().unwrap())
+-            .add_directive("zcash_client_backend::scanning=debug".parse().unwrap())
+-            .add_directive("zcash_client_backend::sync=debug".parse().unwrap());
++            .add_directive(LevelFilter::WARN.into())
++            .add_directive("zcash_client_memory=warn".parse().unwrap())
++            .add_directive("zcash_client_backend::scanning=warn".parse().unwrap())
++            .add_directive("zcash_client_backend::sync=warn".parse().unwrap());
+ 
+         let fmt_layer = tracing_subscriber::fmt::layer()
+             .with_ansi(false) // Only partially supported across browsers
+diff --git a/crates/webzjs-wallet/src/wallet.rs b/crates/webzjs-wallet/src/wallet.rs
+index 025bc09..da4e849 100644
+--- a/crates/webzjs-wallet/src/wallet.rs
++++ b/crates/webzjs-wallet/src/wallet.rs
+@@ -580,6 +580,7 @@ where
+         account_id: AccountId,
+         to_address: ZcashAddress,
+         value: u64,
++        memo: Option<Vec<u8>>,
+     ) -> Result<Pczt, Error> {
+         // Ensure wallet is synced before creating transaction to prevent expiry errors
+         let mut client = self.client.clone();
+@@ -624,10 +625,11 @@ where
+         );
+ 
+         let input_selector = GreedyInputSelector::new();
+-        let request = TransactionRequest::new(vec![Payment::without_memo(
+-            to_address,
+-            Zatoshis::from_u64(value)?,
+-        )])?;
++        let memo = memo.map(|bytes| zcash_protocol::memo::MemoBytes::from_bytes(&bytes))
++            .transpose().map_err(|e| Error::Generic(format!("Invalid memo: {:?}", e)))?;
++        let payment = Payment::new(to_address, Some(Zatoshis::from_u64(value)?), memo, None, None, vec![])
++            .ok_or_else(|| Error::Generic("Memo requires a shielded recipient".into()))?;
++        let request = TransactionRequest::new(vec![payment])?;
+         let mut db = self.db.write().await;
+         let proposal = propose_transfer::<_, _, _,_, <W as WalletCommitmentTrees>::Error>(
+             &mut *db,
+@@ -722,7 +724,7 @@ where
+         Ok(pczt)
+     }
+ 
+-    pub async fn pczt_send(&self, pczt: Pczt) -> Result<(), Error> {
++    pub async fn pczt_send(&self, pczt: Pczt) -> Result<String, Error> {
+         // Verify the wallet is sufficiently synced before sending
+         // The network only accepts anchors within the last 100 blocks
+         let mut client = self.client.clone();
+@@ -780,7 +782,8 @@ where
+         })?;
+         drop(db);
+         self.send_authorized_transactions(&NonEmpty::new(txid))
+-            .await
++            .await?;
++        Ok(txid.to_string())
+     }
+ 
+     pub fn pczt_combine(&self, pczts: Vec<Pczt>) -> Result<Pczt, Error> {
+diff --git a/packages/snap/snap.manifest.json b/packages/snap/snap.manifest.json
+index d26200c..98a7995 100644
+--- a/packages/snap/snap.manifest.json
++++ b/packages/snap/snap.manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "version": "0.3.0",
+-  "description": "WebZjs Snap for Zcash wallet",
+-  "proposedName": "Zcash Shielded Wallet",
++  "description": "TESTNET ONLY \u2014 ChainSafe Zcash Snap development build for Z-Pay",
++  "proposedName": "Z-Pay Testnet (ChainSafe Dev)",
+   "repository": {
+     "type": "git",
+     "url": "https://github.com/ChainSafe/WebZjs.git"
+@@ -22,7 +22,9 @@
+     "endowment:lifecycle-hooks": {},
+     "endowment:webassembly": {},
+     "endowment:rpc": {
+-      "allowedOrigins": ["https://webzjs.chainsafe.dev"]
++      "allowedOrigins": [
++        "http://localhost:3000"
++      ]
+     },
+     "snap_getBip44Entropy": [
+       {
+diff --git a/packages/snap/src/index.tsx b/packages/snap/src/index.tsx
+index 08a5f6a..d7f6b15 100644
+--- a/packages/snap/src/index.tsx
++++ b/packages/snap/src/index.tsx
+@@ -34,6 +34,8 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request, origin }) =>
+   }
+ 
+   switch (request.method) {
++    case 'zpay_getNetwork':
++      return { network: 'test', adapter: 'zpay-v1' };
+     case 'getViewingKey':
+       return await getViewingKey(origin);
+     case 'signPczt':
+diff --git a/packages/snap/src/rpc/getViewingKey.tsx b/packages/snap/src/rpc/getViewingKey.tsx
+index a37f494..5d65d03 100644
+--- a/packages/snap/src/rpc/getViewingKey.tsx
++++ b/packages/snap/src/rpc/getViewingKey.tsx
+@@ -6,7 +6,7 @@ type Network = 'main' | 'test';
+ 
+ export async function getViewingKey(
+   origin: string,
+-  network: Network = 'main',
++  network: Network = 'test',
+   accountIndex: number = 0,
+ ) {
+ 
+diff --git a/packages/snap/src/rpc/setBirthdayBlock.tsx b/packages/snap/src/rpc/setBirthdayBlock.tsx
+index 5078b8b..b884c34 100644
+--- a/packages/snap/src/rpc/setBirthdayBlock.tsx
++++ b/packages/snap/src/rpc/setBirthdayBlock.tsx
+@@ -21,10 +21,10 @@ export async function setBirthdayBlock({
+   // Calculate approximate block heights for different time ranges
+   // Zcash produces ~576 blocks per day (1 block per 75 seconds)
+   const blocksPerDay = 576;
+-  const oneMonthAgo = Math.max(latestBlock - blocksPerDay * 30, 1687104);
+-  const sixMonthsAgo = Math.max(latestBlock - blocksPerDay * 180, 1687104);
+-  const oneYearAgo = Math.max(latestBlock - blocksPerDay * 365, 1687104);
+-  const twoYearsAgo = Math.max(latestBlock - blocksPerDay * 730, 1687104);
++  const oneMonthAgo = Math.max(latestBlock - blocksPerDay * 30, 1842420);
++  const sixMonthsAgo = Math.max(latestBlock - blocksPerDay * 180, 1842420);
++  const oneYearAgo = Math.max(latestBlock - blocksPerDay * 365, 1842420);
++  const twoYearsAgo = Math.max(latestBlock - blocksPerDay * 730, 1842420);
+ 
+   const interfaceId = await snap.request({
+     method: 'snap_createInterface',
+@@ -55,7 +55,7 @@ export async function setBirthdayBlock({
+               - 2+ years ago: ~{twoYearsAgo.toLocaleString()}
+             </Text>
+             <Text>
+-              - Unknown/Full scan: 1687104 (NU5 activation)
++              - Unknown/Full scan: 1842420 (NU5 activation)
+             </Text>
+             <Divider />
+             {!!latestBlock && (
+diff --git a/packages/snap/src/rpc/signPczt.tsx b/packages/snap/src/rpc/signPczt.tsx
+index 47999bd..0db3e79 100644
+--- a/packages/snap/src/rpc/signPczt.tsx
++++ b/packages/snap/src/rpc/signPczt.tsx
+@@ -18,7 +18,7 @@ export async function signPczt({ pcztHexTring, signDetails }: SignPcztParams, or
+       type: 'confirmation',
+       content: (
+         <Box>
+-          <Heading>Sign PCZT</Heading>
++          <Heading>Z-Pay TESTNET — Sign PCZT</Heading>
+           <Divider />
+           <Text>Origin: {origin}</Text>
+           <Text>Recipient: {signDetails.recipient}</Text>
+@@ -38,7 +38,7 @@ export async function signPczt({ pcztHexTring, signDetails }: SignPcztParams, or
+   const seed = await getSeed();
+ 
+   // Generate the UnifiedSpendingKey and obtain the Viewing Key
+-  const spendingKey = new UnifiedSpendingKey('main', seed, 0);
++  const spendingKey = new UnifiedSpendingKey('test', seed, 0);
+   const seedFp = new SeedFingerprint(seed);
+ 
+   if (!/^[0-9a-fA-F]+$/.test(pcztHexTring)) {
+@@ -52,7 +52,7 @@ export async function signPczt({ pcztHexTring, signDetails }: SignPcztParams, or
+ 
+   const pczt = Pczt.from_bytes(pcztUint8Array)
+ 
+-  const pcztSigned = await pczt_sign('main', pczt, spendingKey, seedFp);
++  const pcztSigned = await pczt_sign('test', pczt, spendingKey, seedFp);
+ 
+   const pcztUint8Signed = pcztSigned.serialize();
+ 
+diff --git a/packages/snap/src/utils/dialogs.tsx b/packages/snap/src/utils/dialogs.tsx
+index 6241ca5..1a36221 100644
+--- a/packages/snap/src/utils/dialogs.tsx
++++ b/packages/snap/src/utils/dialogs.tsx
+@@ -7,11 +7,11 @@ export const installDialog = async () => {
+       type: 'alert',
+       content: (
+         <Box>
+-          <Heading>Thank you for installing Zcash Shielded Wallet snap</Heading>
++          <Heading>Z-Pay TESTNET — ChainSafe development Snap</Heading>
+           <Text>
+-            This snap utilizes Zcash Web Wallet. Visit Zcash Web Wallet at{' '}
+-            <Link href="https://webzjs.chainsafe.dev/">
+-              webzjs.chainsafe.dev
++            This development build signs TESTNET transactions only. Visit Zcash Web Wallet at{' '}
++            <Link href="http://localhost:3000/">
++              localhost:3000
+             </Link>
+             .
+           </Text>
+diff --git a/packages/snap/src/utils/setSyncBlockHeight.ts b/packages/snap/src/utils/setSyncBlockHeight.ts
+index 39b48f8..ffacf48 100644
+--- a/packages/snap/src/utils/setSyncBlockHeight.ts
++++ b/packages/snap/src/utils/setSyncBlockHeight.ts
+@@ -1,5 +1,5 @@
+ //NU5 (Network Upgrade 5) (Block 1,687,104, May 31, 2022)
+-const NU5_ACTIVATION = 1687104;
++const NU5_ACTIVATION = 1842420;
+ 
+ export function setSyncBlockHeight(
+   userInputCreationBlock: string | null,
