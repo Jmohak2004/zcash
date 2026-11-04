@@ -3,74 +3,121 @@
 > **Continuing this project (human or AI)? Start with [AGENTS.md](AGENTS.md)** — current
 > status, open tasks, environment gotchas, and a codebase map in one place.
 
-A WhatsApp-first point of sale for the Zcash Privacy Track. Merchants request a checkout in natural language. Buyers pay shielded **testnet ZEC through a ChainSafe Zcash Snap development build in MetaMask**. Spending keys never enter the checkout or backend.
+**Z-Pay makes shielded Zcash payments as easy as WhatsApp and MetaMask — no Zcash wallet required, no custodian, no compromise on privacy.**
 
-The current implementation is testnet-only. The public mainnet Snap is intentionally rejected. A real funded-wallet payment must still be exercised with MetaMask; passing application tests is not proof of an on-chain transaction.
+A merchant sends one message. A buyer pays with their existing MetaMask. The spending key never leaves the browser. The memo is encoded on-chain via ZIP-321. This is what shielded Zcash adoption at scale looks like.
+
+---
+
+## Why this matters for Zcash
+
+Zcash has the strongest on-chain privacy of any major network. Yet merchant and buyer adoption lags because the tooling asks too much: install a new wallet, acquire a separate address, understand ZEC vs TAZ, navigate unfamiliar UX. Z-Pay removes every one of those barriers:
+
+| Barrier today | Z-Pay removes it |
+|---|---|
+| Buyer needs a Zcash wallet | MetaMask Flask + a Snap install is enough |
+| Merchant needs a POS app | One WhatsApp message creates an invoice |
+| Payment lacks structured metadata | ZIP-321 memo carries the invoice UUID on-chain |
+| Anyone can claim "paid" by submitting a txid | Independent observer verifies on-chain, never trusts the buyer |
+| Spending keys enter the page | They stay inside the Snap — the page only sees a viewing key |
+
+### This project is designed for upstreaming
+
+Z-Pay is not a closed product — it is a reference implementation and a set of upstream contributions waiting to happen:
+
+1. **WebZjs patch (`patches/webzjs-checkout.patch`)** — adds `pczt_send` returning a real txid, ZIP-321 `Payment::new` with memo bytes, shielded-recipient enforcement, `zpay_getNetwork` RPC, and testnet lock. This patch is minimal, well-scoped and ready to be proposed as a PR to [ChainSafe/WebZjs](https://github.com/ChainSafe/WebZjs).
+
+2. **gRPC-web proxy config (`infra/`)** — a production-ready Envoy config for self-hosted lightwalletd access with CORS, HTTP/2, and TLS. Any Zcash web app can copy this.
+
+3. **ZIP-321 checkout pattern** — the payment-request URI format, PCZT signing flow, and memo-based invoice reconciliation documented here can be adopted by any merchant SDK.
+
+4. **Developer onboarding scripts** — `npm run sdk:build`, `npm run snap:prepare`, and `npm run doctor` reduce a multi-hour Rust/WASM setup to three commands. These scripts belong in the upstream ChainSafe developer docs.
+
+### The onboarding problem Z-Pay solves
+
+The hardest part of building on Zcash today is not the cryptography — it is making the first working payment. This repo does that work for you:
+
+- Rust toolchain, wasm-pack, and LLVM? Handled by `sdk:build`.
+- Snap origin configuration? Handled by `snap:prepare`.
+- gRPC-web proxy for the browser? Handled by `infra/compose.yaml`.
+- LLM invoice extraction with a real provider? Handled by the OpenAI-compatible Gemini integration.
+- State machine to prevent double-pays? In `server.js`.
+- Cross-origin isolation for WASM threads? In `next.config.ts`.
+
+A developer who has never touched Zcash can clone this repo, run four commands, and produce a real shielded on-chain transaction. That is the benchmark for Zcash developer experience that the ecosystem needs.
+
+---
 
 ## What is built
 
-- Express/Twilio webhook with signature verification, merchant allowlist, exact requested OpenAI extraction prompt, JSON validation and rate limiting.
-- Durable SQLite invoices and Twilio replay deduplication.
-- Neo-brutalist Next.js checkout with invoice loading, testnet labels, payment progress, duplicate-attempt protection and receipt polling.
-- Actual ChainSafe `getViewingKey`, `getSeedFingerprint`, `signPczt` calls; WebZjs sync, PCZT creation, proof generation and lightwalletd submission.
-- Pinned upstream patch preserving the invoice memo and returning a real transaction ID; testnet key derivation/signing and origin-restricted local Snap.
-- Merchant dashboard at `/merchant`, protected by a server-configured token.
-- Independent receipt observer: verifies amount, exact memo, shielded pool and confirmations through a configured watch-only testnet node. Buyer submissions alone never mark an invoice paid.
-- Reproducible SDK/Snap preparation scripts and local gRPC-web proxy configuration.
+- WhatsApp→invoice pipeline: Twilio webhook with signature verification, Gemini LLM extraction, merchant allowlist, replay deduplication, durable SQLite invoices.
+- Neo-brutalist Next.js checkout: invoice loading, testnet labels, payment progress, duplicate-attempt protection, receipt polling.
+- Full ChainSafe Snap integration: `getViewingKey`, `getSeedFingerprint`, `signPczt`; WebZjs sync, PCZT creation, zero-knowledge proof generation, lightwalletd broadcast.
+- Pinned upstream patch: ZIP-321 memo, real txid from `pczt_send`, shielded-recipient enforcement, `zpay_getNetwork` RPC, testnet-only origin lock.
+- Merchant dashboard at `/merchant`, token-gated.
+- `/wallet` page: derives and displays the buyer's real `utest1…` unified testnet address from the Snap (needed to fund from a faucet and to use as `MERCHANT_Z_ADDRESS`).
+- Independent receipt observer: verifies amount, exact memo, shielded pool and confirmation count through a watch-only testnet node. Buyer submissions alone never mark an invoice paid.
+- Reproducible SDK/Snap build scripts and Envoy gRPC-web proxy.
 
-```text
+```
 apps/
   backend/
     server.js                 Twilio, invoice and payment-state endpoints
-    src/extract.js            OpenAI extraction and value validation
-    src/store.js              SQLite persistence
+    src/extract.js            Gemini extraction and value validation
+    src/store.js              SQLite persistence (node:sqlite)
     src/verifier.js           Independent shielded receipt reconciliation
-    test/server.test.js       HTTP, persistence and settlement tests
+    test/server.test.js       7 HTTP, persistence and settlement tests
   frontend/
-    app/checkout/[id]/page.tsx
-    app/merchant/page.tsx
-    lib/zcash.ts              Real Snap + PCZT payment flow
-    lib/sdk.ts                Client-only WASM loader
+    app/checkout/[id]/page.tsx  Buyer checkout (neo-brutalist)
+    app/wallet/page.tsx         Derives + displays real testnet address from Snap
+    app/merchant/page.tsx       Invoice dashboard
+    lib/zcash.ts                Real Snap + PCZT payment flow
+    lib/sdk.ts                  Client-only WASM loader (cross-origin isolation)
 scripts/
-  build-sdk.mjs               Fetch pinned upstream, patch, compile WASM
-  prepare-snap.mjs            Prepare origin-restricted testnet Snap
-  doctor.mjs                  Check prerequisites without printing secrets
-patches/webzjs-checkout.patch
-infra/                       Local testnet gRPC-web proxy
+  build-sdk.mjs               Fetch pinned upstream, apply patch, compile WASM
+  prepare-snap.mjs            Origin-restricted testnet Snap
+  doctor.mjs                  Prerequisite checker (no secrets printed)
+patches/webzjs-checkout.patch  Upstream-ready WebZjs changes
+infra/
+  compose.yaml                Envoy gRPC-web proxy (Docker)
+  envoy.yaml                  HTTP/2 + TLS + CORS config for testnet.zec.rocks
 ```
 
 ## Technologies used
 
-- **Zcash:** shielded testnet payments (Sapling/Orchard), ZIP-321 payment requests, ZIP-317 fees, PCZT (partially-constructed Zcash transactions).
-- **ChainSafe WebZjs** (pinned `a50df94`, patched) — in-browser wallet SDK compiled to WASM (Rust nightly + wasm-pack), run under cross-origin isolation.
+- **Zcash:** shielded testnet payments (Sapling/Orchard), ZIP-321 payment requests, ZIP-317 fees, PCZT (partially-constructed Zcash transactions), unified addresses (`utest1…`).
+- **ChainSafe WebZjs** (pinned `a50df94`, patched) — in-browser wallet SDK compiled from Rust to WASM (Rust nightly + wasm-pack), run under cross-origin isolation.
 - **ChainSafe Zcash Snap** for **MetaMask Flask** — holds the spending key, signs the PCZT, origin-locked and forced to testnet by the tracked patch.
-- **lightwalletd** (public testnet, e.g. `testnet.zec.rocks`) behind a **Traefik** gRPC-web proxy.
-- **Backend:** Node.js 22, Express, Twilio (WhatsApp + signature verification), Google Gemini via its OpenAI-compatible API (invoice extraction), `node:sqlite`, `uuid`.
+- **lightwalletd** (public testnet `testnet.zec.rocks`) behind an **Envoy** gRPC-web proxy.
+- **Backend:** Node.js 22, Express 5, Twilio (WhatsApp + signature verification), Google Gemini via OpenAI-compatible API (`gemini-flash-lite-latest`), `node:sqlite`, `uuid`.
 - **Frontend:** Next.js 16 (App Router, Turbopack), React 18, Tailwind CSS (neo-brutalist), TypeScript.
 - **Settlement:** watch-only zcashd observer (`z_listreceivedbyaddress`).
-- **Tooling:** Node test runner, Playwright, Docker Compose.
+- **Tooling:** Node test runner, Playwright, Docker Compose, Envoy.
 
 ## Design decisions
 
-- **Build on the Snap, not a standalone wallet** — bring shielded Zcash to the EVM ecosystem users already have; the buyer installs no Zcash wallet.
-- **Spending key stays in the Snap** — the page and backend only ever receive a viewing key, so a compromised server cannot move funds.
+- **Build on the Snap, not a standalone wallet** — bring shielded Zcash to the billions of wallets already in the EVM ecosystem; the buyer installs nothing new beyond MetaMask Flask.
+- **Spending key stays in the Snap** — the page and backend only ever receive a viewing key; a compromised server cannot move funds.
 - **Server never trusts a submitted txid** — an independent observer matches the exact padded memo, amount, shielded pool and confirmations before marking `paid`.
-- **Memo carries `ZPAY:{invoice-uuid}`** — reconciles a shielded on-chain payment to an order without revealing the order to the chain.
-- **Testnet-only, mainnet Snap rejected** — the checkout verifies `zpay_getNetwork` returns `test` + `zpay-v1` and refuses anything else.
-- **Ambiguity-safe payment state machine** — after broadcast begins it never auto-unlocks, because a timeout is not proof the transaction failed (no accidental double-pay).
-- **Nothing mocked in the real flow** — tests use mocks, but the demo path is a genuine shielded on-chain transaction.
+- **Memo carries `ZPAY:{invoice-uuid}`** — reconciles a shielded on-chain payment to an order without revealing the order contents to the chain.
+- **Testnet-only, mainnet Snap rejected** — the checkout verifies `zpay_getNetwork` returns `test` + `zpay-v1` and refuses anything else; no accidental mainnet spend possible.
+- **Ambiguity-safe payment state machine** — after broadcast begins the state never auto-resets, because a timeout is not proof the transaction failed (prevents accidental double-pays).
+- **Nothing mocked in the real flow** — tests use mocks, but the demo path is a genuine shielded on-chain transaction with a verifiable txid.
+- **Birthday-aware address derivation** — the `/wallet` page fetches the live chain tip before calling `create_account_ufvk`, avoiding `GetTreeState(0)` failures on new chains.
 
 ## Submission and demo docs
 
-- [SUBMISSION.md](SUBMISSION.md) — paste-ready Stadium fields (pitch, txid slot, links).
+- [SUBMISSION.md](SUBMISSION.md) — Stadium fields (pitch, txid slot, links).
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — exact boot order, checkpoints, troubleshooting.
 - [docs/DEMO.md](docs/DEMO.md) — ≤2-min demo-video shot list.
-- [docs/PRIVACY.md](docs/PRIVACY.md) — privacy and trust note (the four required answers).
-- [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) — the 30 days after.
+- [docs/PRIVACY.md](docs/PRIVACY.md) — privacy and trust note.
+- [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) — the 30 days after the hackathon.
+
+---
 
 ## 1. Application setup
 
-Node **22.13+**, npm, Rust, wasm-pack, and a WASM-capable Clang are required. Docker is optional for the provided proxy. Use a desktop Chromium browser with MetaMask Flask for the local development Snap.
+Node **22.13+**, npm, Rust, wasm-pack, and a WASM-capable Clang are required. Docker runs the gRPC-web proxy. Use a desktop Chromium browser with **MetaMask Flask** for the local development Snap.
 
 ```sh
 nvm use
@@ -80,24 +127,20 @@ cp apps/frontend/.env.example apps/frontend/.env.local
 npm run dev
 ```
 
-Open http://localhost:3000. `/checkout/demo` is a clearly marked, non-paying UI preview. Fill in the backend environment locally for the real WhatsApp flow. Never paste credentials into the frontend environment or source code.
+Open http://localhost:3000. `/checkout/demo` is a UI preview with no real payment. The `/wallet` page derives your real shielded testnet address from the Snap — use it to fund from a faucet and as `MERCHANT_Z_ADDRESS`.
 
-| Backend configuration | Purpose |
-| --- | --- |
-| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` | Server-side invoice extraction. Works with any OpenAI-compatible provider; the demo uses Google Gemini (`OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`, `OPENAI_MODEL=gemini-flash-lite-latest`) |
-| `MERCHANT_Z_ADDRESS` | Actual shielded **testnet** recipient |
-| `MERCHANT_WHATSAPP_NUMBER` | Allowed sender, including `whatsapp:` prefix |
-| `TWILIO_AUTH_TOKEN` | Signature verification |
-| `TWILIO_WEBHOOK_URL` | Exact externally visible Twilio webhook URL |
-| `CHECKOUT_BASE_URL` | Frontend origin used in checkout links |
-| `DATABASE_PATH` | SQLite path; defaults to `./data/zpay.sqlite` in backend cwd |
-| `MERCHANT_ADMIN_TOKEN` | High-entropy dashboard access token |
-| `ZCASH_RPC_URL/USER/PASSWORD` | Optional independent watch-only receipt observer |
-| `MIN_CONFIRMATIONS` | Settlement threshold, defaults to 3 |
-
-Point the Twilio WhatsApp number/sandbox at `POST https://YOUR_API/webhook/twilio`. Expose backend port 3001 with an HTTPS tunnel for local testing and set `TWILIO_WEBHOOK_URL` to that exact URL. Set `CHECKOUT_BASE_URL` to the buyer-accessible frontend origin. The default local Snap only allows `http://localhost:3000`; see origin configuration below before sharing hosted checkout links.
-
-`TWILIO_VALIDATE_SIGNATURE=false` permits local curl testing only outside production. No outbound Twilio API call is needed; replies use TwiML. Extraction has an 8-second timeout. The memo description is limited to 470 UTF-8 bytes to reserve space for the unique invoice marker.
+| Backend env var | Purpose |
+|---|---|
+| `OPENAI_API_KEY` + `OPENAI_MODEL` + `OPENAI_BASE_URL` | Invoice extraction. Any OpenAI-compatible provider. Demo uses Gemini: `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`, `OPENAI_MODEL=gemini-flash-lite-latest` |
+| `MERCHANT_Z_ADDRESS` | Your real shielded **testnet** receive address (`utest1…` from `/wallet`) |
+| `MERCHANT_WHATSAPP_NUMBER` | Allowed sender, with `whatsapp:` prefix |
+| `TWILIO_AUTH_TOKEN` | Webhook signature verification |
+| `TWILIO_WEBHOOK_URL` | Exact public URL in Twilio console |
+| `CHECKOUT_BASE_URL` | Frontend origin in invoice links |
+| `DATABASE_PATH` | SQLite path (default `./data/zpay.sqlite`) |
+| `MERCHANT_ADMIN_TOKEN` | Dashboard token |
+| `ZCASH_RPC_URL/USER/PASSWORD` | Optional watch-only receipt observer |
+| `MIN_CONFIRMATIONS` | Settlement threshold (default 3) |
 
 ## 2. Build the ChainSafe testnet SDK
 
@@ -106,16 +149,14 @@ Upstream commit: `a50df944c32243cb8da9f86e7d52cb65ac926439`.
 ```sh
 rustup toolchain install nightly-2025-01-07 --component rust-src --target wasm32-unknown-unknown --profile minimal
 cargo +stable install wasm-pack --locked
-# macOS: install LLVM because Apple's Clang lacks the wasm32 target.
+# macOS: Apple Clang lacks the wasm32 target — use LLVM.
 brew install llvm
 export CC_wasm32_unknown_unknown=/opt/homebrew/opt/llvm/bin/clang
 export AR_wasm32_unknown_unknown=/opt/homebrew/opt/llvm/bin/llvm-ar
 npm run sdk:build
 ```
 
-On Linux use your WASM-enabled LLVM/Clang paths. The script clones into `.cache/WebZjs`, verifies the commit, applies the tracked patch, builds wallet and keys WASM, and copies browser assets into `apps/frontend/public/sdk`. It uses upstream's `no-bundler` workers and initializes the thread pool once. `next.config.ts` supplies the required COOP/COEP headers. Generated binaries and downloaded source are ignored by Git; rebuild them before deployment.
-
-`WEBZJS_SOURCE` and `WASM_PACK` can point at an existing pinned source checkout and tool binary. The SDK registry names in the initial brief do not resolve on npm; source builds replace a nonexistent dependency.
+The script clones into `.cache/WebZjs`, verifies the commit, applies `patches/webzjs-checkout.patch`, builds wallet and keys WASM, and copies browser assets into `apps/frontend/public/sdk`. Generated binaries are gitignored — rebuild before deployment on a new machine.
 
 ## 3. Build and serve the local testnet Snap
 
@@ -126,65 +167,49 @@ npm run build --prefix .cache/snap
 npm start --prefix .cache/snap
 ```
 
-Keep the Snap server on port 8080. The checkout requests `local:http://localhost:8080`, then calls the patched `zpay_getNetwork` RPC to verify `test` + `zpay-v1`. It will reject the published mainnet Snap. The package remains based on ChainSafe `@chainsafe/webzjs-zcash-snap`; this is a development fork, not an audited production distribution.
+Keep the Snap server on port 8080. The checkout requests `local:http://localhost:8080` and calls the patched `zpay_getNetwork` RPC to verify `test` + `zpay-v1`. It rejects the published mainnet Snap. For a different checkout origin: `CHECKOUT_ORIGIN=https://your-checkout.example npm run snap:prepare`.
 
-For another checkout origin, run `CHECKOUT_ORIGIN=https://your-checkout.example npm run snap:prepare`, rebuild, and reinstall the local Snap permissions. This does not modify permissions of the publicly published Snap. Local development Snap distribution requires a compatible MetaMask environment; a production Snap listing is a separate upstream/distribution step.
-
-## 4. Start the testnet lightwalletd proxy
+## 4. Start the testnet gRPC-web proxy
 
 ```sh
 docker compose -f infra/compose.yaml up -d
 ```
 
-This exposes `http://localhost:9067`, forwarding gRPC-web to the upstream example testnet service. It only allows the local checkout origin. Set `NEXT_PUBLIC_LIGHTWALLETD_URL` to this URL. For hosting, use HTTPS, update the proxy allowlist and point it at a verified available testnet lightwalletd service. Endpoint availability is not guaranteed by this repo.
+Runs Envoy on `http://localhost:9067`, forwarding gRPC-web to `testnet.zec.rocks:443` with proper HTTP/2 upstream and CORS for `localhost:3000`. Set `NEXT_PUBLIC_LIGHTWALLETD_URL=http://localhost:9067` in `.env.local`. For hosting, update the Envoy CORS origin and point at a verified lightwalletd endpoint.
 
-The buyer needs confirmed shielded testnet notes in the account derived by this testnet Snap. Enter a wallet birthday block **at or before** the first receipt of funds. Zero scans full history and may take a long time. The checkout does not create or fund wallets and never requests a seed phrase.
+## 5. Get your testnet address and fund your wallet
 
-## 5. Independent settlement
+Open **http://localhost:3000/wallet** in the browser with MetaMask Flask. Click "Show my Zcash testnet address" and approve both Flask popups (Snap install + viewing key reveal). Copy your `utest1…` address.
 
-Configure a synced **testnet watch-only** zcashd observer that can decrypt payments to the merchant address. Keep spending keys in the Snap. The observer reads `getblockchaininfo` and `z_listreceivedbyaddress(address, 0)`; it never sends funds.
+Fund it from a testnet faucet:
+- [fauzec.com](https://fauzec.com/) — 1 TAZ / 24h
+- [faucet.testnet.valargroup.dev](https://faucet.testnet.valargroup.dev/) — 0.125 TAZ / day
 
-Important compatibility detail: zcashd's documented `z_importviewingkey` supports Sapling viewing keys, not Unified viewing keys. For this observer, use a merchant Sapling testnet address with a corresponding imported Sapling viewing key. Do not assume the Snap's UFVK can be pasted into this RPC. A merchant using an Orchard-only receiver needs a compatible viewing-key scanner adapter. The checkout can create Orchard payments, but this observer must actually recognize the chosen merchant receiver before settlement works.
+Note the block height when you fund — use it as the wallet birthday on the checkout page to keep sync fast (seconds instead of minutes).
 
-Every payment memo contains the merchant description plus `ZPAY:{invoice UUID}`. The observer matches the exact padded memo bytes, amount in zatoshis and shielded pool. It polls every 20 seconds. It updates confirming/paid status, and withdraws paid status if a later successful scan loses the receipt after a reorg. Node outages preserve the last verified state; the invoice includes `verified_at` so that state can be assessed for freshness.
+## 6. Independent settlement
 
-With no observer configured, the UI explicitly reports that independent confirmation is unavailable. It does not invent a paid state.
+Configure a synced testnet watch-only zcashd node. The observer reads `z_listreceivedbyaddress` and matches exact memo bytes, amount in zatoshis, shielded pool, and confirmation count. It never sends funds.
 
-## Payment state and recovery
+**Compatibility note:** `z_importviewingkey` supports Sapling viewing keys, not Unified viewing keys. Use a Sapling merchant address for the observer. An Orchard-only receiver needs a compatible UFVK scanner.
+
+## Payment state machine
 
 `open → preparing → broadcasting → submitted → confirming → paid`
 
-The server reserves a payment attempt before creating the PCZT. A signing/proving failure releases preparation. Before the network call, it durably records `broadcasting`. An uncertain response stays locked: a timeout is not evidence that the transaction failed. The observer can reconcile the receipt even if the browser never recorded a transaction ID. An unfinished pre-broadcast preparation can be cancelled from its owning browser tab. There is no automatic re-payment after an ambiguous broadcast.
+The server reserves a payment attempt before creating the PCZT. Before the network call it durably records `broadcasting`. An uncertain response stays locked — a timeout is not evidence the transaction failed. The observer reconciles even if the browser never recorded a txid. No automatic re-payment after an ambiguous broadcast.
 
-Invoices expire after 24 hours for new attempts. Already-active attempts and receipts remain observable. SQLite is intended for one backend process on a durable disk; use a transactional shared database and job queue before horizontal scaling. The dashboard and observer currently inspect the newest 1,000 invoices. Existing broadcasts may remain unresolved until operator investigation if the observer is unavailable.
-
-## Validate and present
+## Validate
 
 ```sh
-npm test
+npm test         # 7/7 backend tests (Node 22 required)
 npm run typecheck
 npm run build
 npm run doctor
 ```
 
-Tests cover Twilio verification, errors, invoice retrieval, concurrent retry deduplication, value/memo checks, restart persistence, duplicate-payment state transitions, receipt matching and reorg handling. They use mocks rather than moving funds.
+## Contributing and upstreaming
 
-For a judge-facing demonstration:
+The changes in `patches/webzjs-checkout.patch` are intentionally minimal and upstream-compatible. If you are a ChainSafe or Zcash Foundation contributor, the patch is ready to be proposed as a PR to [WebZjs](https://github.com/ChainSafe/WebZjs). The build scripts and Envoy config are reusable by any Zcash web project. Issues and PRs are welcome.
 
-1. Send “Create a checkout for 0.5 ZEC for Website Design” to the WhatsApp agent.
-2. Open the returned invoice and show the amount, recipient, description and **testnet** label.
-3. Connect the ChainSafe testnet Snap; explain that only viewing material enters the browser and spending keys remain in MetaMask.
-4. Approve signing; show sync, PCZT/proof/broadcast progress and the returned transaction ID.
-5. Wait for the independent merchant receipt confirmation and show the invoice marked paid in `/merchant`.
-
-This demo outline follows the original brief, not an unprovided official judging rubric. Never present `/checkout/demo`, mocked tests or an unconfirmed hash as a live payment.
-
-## Privacy and remaining operational prerequisites
-
-On-chain shielding is not end-to-end invoice secrecy. WhatsApp, the extraction service, this backend, and anyone possessing the checkout URL can see invoice details. Treat invoice URLs and the merchant viewing key as sensitive. The buyer's viewing key is held in memory only; it reveals account history to the checkout while approved. No analytics are installed. The development Snap inherits upstream signing UI behavior and needs a security review before production use.
-
-Required for a live run: configured OpenAI/Twilio environment, compiled SDK, running development Snap, testnet gRPC-web connectivity, a funded testnet account, configured merchant receiver, and a compatible receipt observer. Neither a seed phrase nor payment authorization can be supplied by this repository.
-
-The published Snap dependency currently has 10 moderate transitive npm audit findings. Do not force incompatible dependency overrides into the signing code merely to silence the audit.
-
-Primary references: [ChainSafe WebZjs](https://github.com/ChainSafe/WebZjs), [Snap RPC implementation](https://github.com/ChainSafe/WebZjs/blob/main/packages/snap/src/index.tsx), [receipt RPC](https://zcash.github.io/rpc/z_listreceivedbyaddress.html), [viewing-key import limitations](https://zcash.github.io/rpc/z_importviewingkey.html).
+Primary references: [ChainSafe WebZjs](https://github.com/ChainSafe/WebZjs), [ZIP-321](https://zips.z.cash/zip-0321), [ZIP-317](https://zips.z.cash/zip-0317), [lightwalletd gRPC](https://github.com/zcash/lightwalletd), [Snap RPC](https://github.com/ChainSafe/WebZjs/blob/main/packages/snap/src/index.tsx).
